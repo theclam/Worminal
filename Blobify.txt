@@ -1,0 +1,34 @@
+   10PRINT "Blobify - takes an 8x16 fixed bitmap Windows font file"
+   20PRINT "and outputs a blob containing the 4bpp version suitable"
+   30PRINT "for Worminal to display."
+   40
+   50PRINT "Enter source font file";
+   51INPUT inname$ 
+   60infile = OPENIN(inname$)
+   61PRINT "Enter destination font file (enter for 'fontblob')";
+   62INPUT outname$
+   63IF outname$ = "" THEN outname$ = "fontblob"
+   70outfile = OPENOUT(outname$)
+   80
+   90REM Skip header
+  100FOR i% = 1 TO 1626 : c% = BGET#infile : NEXT i%
+  110
+  120FOR i% = 0 TO 255
+  130  FOR y% = 0 TO 15
+  140    ic% = BGET#infile
+  150    FOR x% = 0 TO 6 STEP 2
+  160      IF ((ic% << x%) AND 128) = 128 THEN
+  170         oc% = &0F
+  180        ELSE
+  190         oc% = 0
+  200      ENDIF
+  210      IF ((ic% << (x% + 1)) AND 128) = 128 THEN oc% = oc% OR &F0
+  220      BPUT#outfile, oc%
+  230    NEXT x%
+  240  NEXT y%
+  250NEXT i%
+  260
+  270CLOSE#infile
+  280CLOSE#outfile
+  290PRINT "Completed."
+

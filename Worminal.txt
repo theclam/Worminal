@@ -1,0 +1,827 @@
+   10REM Bob Worminal - v0.1
+   20REM Defaults to 9600 baud, 8N1, no handshaking
+   30ON ERROR PRINT REPORT$;" at line ";ERL : END
+   40DIM font% 16384
+   50DIM fifo% 256
+   60DIM code% 5000
+   70PRINT "Assembling..."
+   80FOR pass% = 0 TO 2 STEP 2
+   90P% = code%
+  100[
+  110 OPT pass%
+  120 
+  130 ; Variables / constants
+  140 .palette
+  150   EQUB &0 : EQUB &10 : EQUB &00 : EQUB &00 : EQUB &00 ; Black
+  160   EQUB &4 : EQUB &10 : EQUB &00 : EQUB &00 : EQUB &AA ; Blue
+  170   EQUB &2 : EQUB &10 : EQUB &00 : EQUB &AA : EQUB &00 ; Green
+  180   EQUB &6 : EQUB &10 : EQUB &00 : EQUB &AA : EQUB &AA ; Cyan
+  190   EQUB &1 : EQUB &10 : EQUB &AA : EQUB &00 : EQUB &00 ; Red
+  200   EQUB &5 : EQUB &10 : EQUB &AA : EQUB &00 : EQUB &AA ; Magenta
+  210   EQUB &3 : EQUB &10 : EQUB &AA : EQUB &55 : EQUB &00 ; Brown
+  220   EQUB &7 : EQUB &10 : EQUB &AA : EQUB &AA : EQUB &AA ; Lt grey
+  230   EQUB &8 : EQUB &10 : EQUB &55 : EQUB &55 : EQUB &55 ; Dk grey
+  240   EQUB &C : EQUB &10 : EQUB &55 : EQUB &55 : EQUB &FF ; Lt blue
+  250   EQUB &A : EQUB &10 : EQUB &55 : EQUB &FF : EQUB &55 ; Lt green
+  260   EQUB &E : EQUB &10 : EQUB &55 : EQUB &FF : EQUB &FF ; Lt cyan
+  270   EQUB &9 : EQUB &10 : EQUB &FF : EQUB &55 : EQUB &55 ; Lt red
+  280   EQUB &D : EQUB &10 : EQUB &FF : EQUB &55 : EQUB &FF ; L magenta
+  290   EQUB &B : EQUB &10 : EQUB &FF : EQUB &FF : EQUB &55 ; Yellow
+  300   EQUB &F : EQUB &10 : EQUB &FF : EQUB &FF : EQUB &FF ; White
+  310 .screen_ptr    ; Pointer to start of screen memory
+  320   EQUD 148
+  330   EQUD -1
+  340 .font_ptr
+  350   EQUD font%
+  360 .x
+  370   EQUD 0
+  380 .y
+  390   EQUD 0
+  400 .fg_colour
+  410   EQUD &FFFFFFFF
+  420 .bg_colour
+  430   EQUD &00000000
+  440 .intense         ; set the "8" bits for bright colours
+  450   EQUD &88888888
+  460 .intensity       ; current intensity state
+  470   EQUD &00000000
+  480 .mode
+  490   EQUD &00000000
+  500 .chr
+  510   EQUB 65
+  520   
+  530 ALIGN
+  540 
+  550 ; Initialisation routine
+  560 .init 
+  570 MOV R0, #3             ; Disable printer / spooling
+  580 MOV R1, #84
+  590 SWI "OS_Byte"
+  600 
+  610 MOV R0, #22            ; Switch display mode
+  620 SWI "OS_WriteC"
+  630 MOV R0, #27            ; 640x480x256
+  640 SWI "OS_WriteC"
+  650 
+  660 SWI "OS_RemoveCursors" ; duh...
+  670 
+  680 ADR R0, screen_ptr     ; Get pointer to screen memory
+  690 ADR R1, screen_ptr
+  700 SWI "OS_ReadVduVariables"
+  710 
+  720 ADR R12, palette             ; Get the palette entries
+  730 ADD R1, R12, #75
+  740 MOV R0, #&0C                 ; "Set palette" OS_WORD
+  750 .pal_loop
+  760   SWI &07
+  770   SUB R1, R1, #5
+  780   CMPS R1, R12
+  790 BGE pal_loop
+  800 
+  810 MOV R0, #1 : MOV R1, #0 : SWI &57                 ; 8,n,1
+  820 MOV R0, #5 : MOV R1, #8 : SWI &57                 ; 9600 Rx
+  830 MOV R0, #6 : MOV R1, #8 : SWI &57                 ; 9600 Tx
+  840 MOV R0, #0 : MOV R1, #54 : MOV R2, #0 : SWI &57   ; No handshake
+  850 MOV R0, #2 : MOV R1, #2 : SWI 6               ; Enable Serial Rx
+  860 MOV R0, #229 : MOV R1, #255 : MOV R2, #0 : SWI 6  ; No Escape
+  870 
+  880 
+  890 MOV R15, R14           ; Return to BASIC
+  900 
+  910 ; Draw - simply renders the character in R0 at x,y
+  920 .draw
+  930 LDR R12, screen_ptr       ; Start of graphics memory
+  940 LDR R1, x                 ; load x value
+  950 LDR R2, y                 ; load y value
+  960 ADD R12, R12, R1, LSL #2  ; Add 2x to gmem base
+  970 ADD R12, R12, R2, LSL #10 ; Add 1024y
+  980 ADD R12, R12, R2, LSL #12 ; Add 4096y -> R12 now start addr
+  990 
+ 1000 LDR R11, font_ptr         ; Start of font buffer
+ 1010 ;LDRB R0, chr              ; Get character number
+ 1020 ADD R11, R11, R0, LSL #6  ; x64 -> R11 now font entry address
+ 1030 
+ 1040 LDR R10, fg_colour
+ 1050 LDR R9, bg_colour
+ 1060 
+ 1070 ; Technique here is (mask && fg_colour) || (^mask && bg_colour)
+ 1080 LDMFD R11!, {R0-7}           ; Fetch first 8 font words
+ 1090 MVN R8, R0 : AND R0, R0, R10 : AND R8, R8, R9 : ORR R0, R0, R8   
+ 1100 STR R0, [R12], #320
+ 1110 MVN R8, R1 : AND R1, R1, R10 : AND R8, R8, R9 : ORR R1, R1, R8 
+ 1120 STR R1, [R12], #320
+ 1130 MVN R8, R2 : AND R2, R2, R10 : AND R8, R8, R9 : ORR R2, R2, R8 
+ 1140 STR R2, [R12], #320
+ 1150 MVN R8, R3 : AND R3, R3, R10 : AND R8, R8, R9 : ORR R3, R3, R8 
+ 1160 STR R3, [R12], #320
+ 1170 MVN R8, R4 : AND R4, R4, R10 : AND R8, R8, R9 : ORR R4, R4, R8 
+ 1180 STR R4, [R12], #320
+ 1190 MVN R8, R5 : AND R5, R5, R10 : AND R8, R8, R9 : ORR R5, R5, R8 
+ 1200 STR R5, [R12], #320
+ 1210 MVN R8, R6 : AND R6, R6, R10 : AND R8, R8, R9 : ORR R6, R6, R8 
+ 1220 STR R6, [R12], #320
+ 1230 MVN R8, R7 : AND R7, R7, R10 : AND R8, R8, R9 : ORR R7, R7, R8 
+ 1240 STR R7, [R12], #320
+ 1250 LDMFD R11!, {R0-7}      ; Fetch next 8 font words
+ 1260 MVN R8, R0 : AND R0, R0, R10 : AND R8, R8, R9 : ORR R0, R0, R8   
+ 1270 STR R0, [R12], #320
+ 1280 MVN R8, R1 : AND R1, R1, R10 : AND R8, R8, R9 : ORR R1, R1, R8 
+ 1290 STR R1, [R12], #320
+ 1300 MVN R8, R2 : AND R2, R2, R10 : AND R8, R8, R9 : ORR R2, R2, R8 
+ 1310 STR R2, [R12], #320
+ 1320 MVN R8, R3 : AND R3, R3, R10 : AND R8, R8, R9 : ORR R3, R3, R8 
+ 1330 STR R3, [R12], #320
+ 1340 MVN R8, R4 : AND R4, R4, R10 : AND R8, R8, R9 : ORR R4, R4, R8 
+ 1350 STR R4, [R12], #320
+ 1360 MVN R8, R5 : AND R5, R5, R10 : AND R8, R8, R9 : ORR R5, R5, R8 
+ 1370 STR R5, [R12], #320
+ 1380 MVN R8, R6 : AND R6, R6, R10 : AND R8, R8, R9 : ORR R6, R6, R8 
+ 1390 STR R6, [R12], #320
+ 1400 MVN R8, R7 : AND R7, R7, R10 : AND R8, R8, R9 : ORR R7, R7, R8 
+ 1410 STR R7, [R12], #320
+ 1420 
+ 1430 MOV R15, R14
+ 1440 
+ 1450 .print
+ 1460 STMFD R13!, {R14}
+ 1470 BL draw                      ; render the character
+ 1480 LDMFD R13!, {R14}
+ 1490 
+ 1500 LDR R0, x                    ; fetch current X
+ 1510 LDR R1, y                    ; fetch current Y
+ 1520 ADD R0, R0, #1               ; increment X
+ 1530 CMP R0, #80                  ; check if we wrap...
+ 1540 MOVEQ R0, #0                 ; zero the X
+ 1550 ADDEQ R1, R1, #1             ; increment the Y
+ 1560 CMPEQ R1, #25                ; check if Y wrapped...
+ 1570 MOVEQ R1, #24
+ 1580 STR R0, x                    ; write back X
+ 1590 STR R1, y                    ; write back Y
+ 1600 
+ 1610 MOVNE R15, R14               ; if not, return
+ 1620 
+ 1630 ; Routine to scroll the screen up by one line
+ 1640 .scroll
+ 1650 LDR R12, screen_ptr          ; Destination screen address
+ 1660 MOV R10, #3840               ; 8 regs x 240 loops
+ 1670 ADD R11, R12, #5120          ; Source screen address (+16 rows)
+ 1680 .scroll_loop
+ 1690   LDMFD R11!, {R0-7}         ; Blit...
+ 1700   STMEA R12!, {R0-7}         ; ... that shit
+ 1710 SUBS R10, R10, #1
+ 1720 BNE scroll_loop
+ 1730 
+ 1740 MOV R0, #0 : MOV R1, #0 : MOV R2, #0 : MOV R3, #0
+ 1750 MOV R4, #0 : MOV R5, #0 : MOV R6, #0 : MOV R7, #0
+ 1760 MOV R10, #160                ; Clear row 25 ready for use
+ 1770 .clear_loop
+ 1780   STMEA R12!, {R0-7}
+ 1790 SUBS R10, R10, #1
+ 1800 BNE clear_loop
+ 1810 
+ 1820 MOV R15, R14
+ 1830 
+ 1840 ; Routine to implement new line, scrolling if necessary
+ 1850 .newline
+ 1860 MOV R0, #0                   ; Set X to 0
+ 1870 LDR R1, y                    ; fetch current Y
+ 1880 ADD R1, R1, #1               ; increment Y
+ 1890 CMP R1, #25                  ; check if Y wrapped...
+ 1900 MOVEQ R1, #24                ; correct it if wrapped
+ 1910 STR R0, x                    ; write back X
+ 1920 STR R1, y                    ; write back Y
+ 1930 BEQ scroll                   ; if wrapped, scroll
+ 1940 MOV R15, R14                 ; if not wrapped, return
+ 1950 
+ 1960 ; Colour setting routines
+ 1970 .set_fg                      ; Set the foreground colour
+ 1980 AND R0, R0, #&F
+ 1990 ORR R1, R0, R0, LSL #4
+ 2000 ORR R0, R1, R1, LSL #8
+ 2010 ORR R1, R0, R0, LSL #16
+ 2020 STR R1, fg_colour
+ 2030 MOV R15, R14
+ 2040 
+ 2050 .set_bg                      ; Set the background colour
+ 2060 AND R0, R0, #&F
+ 2070 ORR R1, R0, R0, LSL #4
+ 2080 ORR R0, R1, R1, LSL #8
+ 2090 ORR R1, R0, R0, LSL #16
+ 2100 STR R1, bg_colour
+ 2110 MOV R15, R14
+ 2120 
+ 2130; Cursor move routines
+ 2140; Inputs - R0 (for direction), params (for magnitude)
+ 2150.moves
+ 2160 ADR R11, params              ; R11 -> address of params
+ 2170                              ; R0 -> terminal character
+ 2180 LDRB R1, [R11], #1           ; R1 -> magnitude / 1st param
+ 2190 LDR R2, x                    ; R2 -> current X coordinate
+ 2200 LDR R3, y                    ; R3 -> current Y coordinate
+ 2210 
+ 2220 CMPS R1, #0                  ; magnitude must be at least 1
+ 2230 MOVEQ R1, #1                 ; if it's zero, set it to 1
+ 2240 
+ 2250 CMPS R0, #&48                ; H - locate
+ 2260  SUBEQ R3, R1, #1            ; parameter 0 -> y (subtract 1)
+ 2270  LDREQB R1, [R11]            ; parameter 1 -> x (subtract 1)
+ 2280  SUBEQ R2, R1, #1
+ 2290  BEQ movesanity              ; jump to bounds check
+ 2300 
+ 2310 CMPS R1, #0                  ; other than for locate, magnitude 
+ 2320 MOVEQ R1, #1                 ; "0" means "1".
+ 2330 
+ 2340 CMPS R0, #&41                ; A - up
+ 2350  SUBEQ R3, R3, R1            ;       subtract magnitude from y
+ 2360 CMPS R0, #&42                ; B - down
+ 2370  ADDEQ R3, R3, R1            ;       add magnitude to y
+ 2380 CMPS R0, #&43                ; C - right
+ 2390  ADDEQ R2, R2, R1            ;       add magnitude to x
+ 2400 CMPS R0, #&44                ; D - left
+ 2410  SUBEQ R2, R2, R1            ;       subtract magnitude from x
+ 2420 
+ 2430 .movesanity                  ; Check we've not left the screen
+ 2440  CMPS R3, #0                 ; if y < 0
+ 2450  MOVLE R3, #0                ;    then x = 0
+ 2460  CMPS R3, #24                ; if y > 24
+ 2470  MOVGT R3, #24               ;    then x = 24
+ 2480  CMPS R2, #0                 ; if x < 0
+ 2490  MOVLE R2, #0                ;    then x = 0
+ 2500  CMPS R2, #79                ; if x > 79
+ 2510  MOVGT R2, #79               ;    then x = 79
+ 2520  
+ 2530  STR R3, y                   ; Write back location values
+ 2540  STR R2, x 
+ 2550  MOV R15, R14                ; Return
+ 2560 
+ 2570; Delete routines
+ 2580; R0 = terminal character indicating type
+ 2590 .delete
+ 2600                              ; R0 <- terminal character
+ 2610  LDRB R1, params             ; R1 <- parameter 0
+ 2620  LDR R2, x                   ; R2 <- current x
+ 2630  LDR R3, y                   ; R3 <- current y
+ 2640  LDR R4, bg_colour           ; R4 <- background colour
+ 2650  LDR R11, screen_ptr         ; R11 <- start pointer
+ 2660  
+ 2670  CMP R0, #&4B                ; K - delete in row
+ 2680  BNE notK
+ 2690  
+ 2700   ADD R11, R11, R3, LSL #10
+ 2710   ADD R11, R11, R3, LSL #12  ; R11 <- row start pointer
+ 2720   MOV R12, #79               ; R12 <- byte counter
+ 2730  
+ 2740   CMPS R1, #1                ; Check parameter value:
+ 2750   ADDLT R11, R11, R2, LSL #2 ; 0 - cursor to end of line
+ 2760   SUBLT R12, R12, R2
+ 2770   MOVEQ R12, R2              ; 1 - start of line to cursor
+ 2780                              ; 2 - whole line
+ 2790                              
+ 2800   ; R11 has start address, R12 has the number of bytes
+ 2810   .k_loop
+ 2820   STR R4, [R11], #320 : STR R4, [R11], #320 : STR R4, [R11], #320
+ 2830   STR R4, [R11], #320 : STR R4, [R11], #320 : STR R4, [R11], #320
+ 2840   STR R4, [R11], #320 : STR R4, [R11], #320 : STR R4, [R11], #320
+ 2850   STR R4, [R11], #320 : STR R4, [R11], #320 : STR R4, [R11], #320
+ 2860   STR R4, [R11], #320 : STR R4, [R11], #320 : STR R4, [R11], #320
+ 2870   STR R4, [R11], #4
+ 2880   SUB R11, R11, #4800 
+ 2890   SUBS R12, R12, #1
+ 2900
+ 2910   BGE k_loop  
+ 2920   MOV R15, R14
+ 2930  .notK
+ 2940  
+ 2950  CMP R0, #&4A                ; J - clear in screen
+ 2960  BNE del_end
+ 2970  CMPS R1, #0                 ; Check parameter
+ 2980  MOVNE R2, #0
+ 2990  MOVNE R3, #0                ; 1 or 2 - clear entire screen
+ 3000  STRNE R2, x
+ 3010  STRNE R3, y                 ; and locate (0,0)
+ 3020  BNE J_clr                   
+ 3030  .J_cls
+ 3040  ADD R11, R11, R3, LSL #12   ; 0 - clear from cursor to end
+ 3050  ADD R11, R11, R3, LSL #10   ; R11 <- row pointer
+ 3060  ADD R11, R11, R2, LSL #2    ; R11 <- full pointer
+ 3070  RSB R12, R2, #79            ; bytes left on line
+ 3080  STMFD R13!, {R14}           ; push return vector
+ 3090  BL k_loop                   ; clear line
+ 3100  LDMFD R13!, {R14}           ; pop return vector
+ 3110  MOV R2, #0
+ 3120  ADD R3, R3, #1              ; move to next line
+ 3130  
+ 3140  CMP R3, #24                 ; check if we're at the bottom
+ 3150  MOVGE R15, R14              ; return if we are
+ 3160  
+ 3170  ADD R11, R11, #4800         ; otherwise R11 <- next row ptr
+ 3180   
+ 3190  .J_clr
+ 3200  RSB R12, R2, #25            ; R12 <- number of lines left
+ 3210  
+ 3220  ; TODO - I am sure this should be 24 not 25
+ 3230  
+ 3240  MOV R12, R12, LSL #2        ; R12 <- number of pixel lines left
+ 3250  MOV R0, R4 : MOV R1, R4 : MOV R2, R4 : MOV R3, R4
+ 3260  MOV R5, R4 : MOV R6, R4 : MOV R7, R4 : MOV R8, R4 : MOV R9, R4
+ 3270  
+ 3280  .J_yloop
+ 3290  STMEA R11!, {R0-R9} : STMEA R11!, {R0-R9} : STMEA R11!, {R0-R9}
+ 3300  STMEA R11!, {R0-R9} : STMEA R11!, {R0-R9} : STMEA R11!, {R0-R9}
+ 3310  STMEA R11!, {R0-R9} : STMEA R11!, {R0-R9}
+ 3320  STMEA R11!, {R0-R9} : STMEA R11!, {R0-R9} : STMEA R11!, {R0-R9}
+ 3330  STMEA R11!, {R0-R9} : STMEA R11!, {R0-R9} : STMEA R11!, {R0-R9}
+ 3340  STMEA R11!, {R0-R9} : STMEA R11!, {R0-R9}
+ 3350  STMEA R11!, {R0-R9} : STMEA R11!, {R0-R9} : STMEA R11!, {R0-R9}
+ 3360  STMEA R11!, {R0-R9} : STMEA R11!, {R0-R9} : STMEA R11!, {R0-R9}
+ 3370  STMEA R11!, {R0-R9} : STMEA R11!, {R0-R9}
+ 3380  STMEA R11!, {R0-R9} : STMEA R11!, {R0-R9} : STMEA R11!, {R0-R9}
+ 3390  STMEA R11!, {R0-R9} : STMEA R11!, {R0-R9} : STMEA R11!, {R0-R9}
+ 3400  STMEA R11!, {R0-R9} : STMEA R11!, {R0-R9}
+ 3410  SUBS R12, R12, #1
+ 3420  BGE J_yloop
+ 3430
+ 3440  .del_end
+ 3450  MOV R15, R14
+ 3460 
+ 3470 ; ---------------------------------------
+ 3480 ; Main loop - grab from serial, display,
+ 3490 ;             send keypresses, repeat
+ 3500 .main
+ 3510   LDR R12, fifo_ptr          ; R12 <- FIFO pointer
+ 3520   LDR R11, fifo_w            ; R11 <- FIFO write offset
+ 3530   LDR R10, fifo_r            ; R10 <- FIFO read offset
+ 3540   
+ 3550   ; Empty entire serial buffer into FIFO
+ 3560   .check_ser
+ 3570     MOV R0, #4               ; OS_SerialOp 4 (get byte)
+ 3580     SWI 87                   ; returns Carry=NoRx R1=Rx byte
+ 3590      STRCCB R1, [R12,R11]    ; Store byte in FIFO if received
+ 3600      ADDCC R11, R11, #1      ; Increment write offset
+ 3610      ANDCC R11, R11, #&FF    ; Wrap at 255
+ 3620   BCC check_ser
+ 3630   STR R11, fifo_w            ; store write offset back
+ 3640   
+ 3650   STMFD R13!, {R14}
+ 3660   BL handle_chr              ; Jump to incoming character handler
+ 3670   LDMFD R13!, {R14}
+ 3680   MOV R15, R14 
+ 3690
+ 3700 .fifo_ptr                    ; Pointer to Rx FIFO
+ 3710  EQUD fifo%
+ 3720 .fifo_w                      ; offset of write pointer in FIFO
+ 3730  EQUD 0
+ 3740 .fifo_r                      ; offset of read pointer in FIFO
+ 3750  EQUD 0
+ 3760 .mode                        ; State machine "mode" value
+ 3770  EQUD 100
+ 3780  
+ 3790 .params                      ; Parameter storage space (up to 7)
+ 3800   EQUD &FF000000
+ 3810   EQUD &FFFFFFFF
+ 3820   EQUD &0
+ 3830   ;EQUD &0 
+ 3840 
+ 3850 ; Main routine for handing Rx data
+ 3860 .handle_chr
+ 3870 LDR R11, fifo_r              ; R11 <- FIFO read offset
+ 3880 .chr_loop
+ 3890 LDR R12, fifo_ptr            ; R12 <- pointer to FIFO
+ 3900 LDR R10, fifo_w              ; R10 <- FIFO write offset
+ 3910 
+ 3920 CMPS R10, R11                ; If read = write then no new chars
+ 3930 MOVEQ R15, R14               ; return if nothing to do
+ 3940 
+ 3950 LDRB R0, [R12, R11]          ; R0 <- character
+ 3960 LDR R1, mode                 ; R1 <- mode
+ 3970 
+ 3980 ; ------------------------------------------------------
+ 3990 ; Normal mode - where we should spend most of our time
+ 4000 ; ------------------------------------------------------
+ 4010 CMPS R1, #100                ; MODE normal character
+ 4020 BNE chr_esc
+ 4030   CMPS R0, #&FF              ; Rx 0xFF - Telnet negotiation
+ 4040     MOVEQ R1, #&FF
+ 4050     STREQ R1, mode
+ 4060     BEQ chr_done
+ 4070   CMPS R0, #&1B              ; Rx escape character
+ 4080     MOVEQ R1, #101           ; (shift to escape state)
+ 4090     STREQ R1, mode
+ 4100     BEQ chr_done
+ 4110   CMPS R0, #&0A              ; Rx newline
+ 4120     BNE chr_cr
+ 4130     STMFD R13!, {R1,R12,R14}
+ 4140     BL newline
+ 4150     LDMFD R13!, {R1,R12,R14}
+ 4160     B chr_done
+ 4170   .chr_cr
+ 4180   CMPS R0, #&0D              ; Rx carriage return
+ 4190     BNE chr_bs
+ 4200     MOV R0, #0
+ 4210     STR R0, x
+ 4220     BEQ chr_done
+ 4230   .chr_bs
+ 4240   CMPS R0, #&08              ; Rx backspace
+ 4250     BNE chr_ff
+ 4260     LDR R0, x                ; try backspacing
+ 4270     SUBS R0, R0, #1
+ 4280     STRPL R0, x
+ 4290     B chr_done
+ 4300   .chr_ff                    ; Rx Form Feed - clear screen
+ 4310   CMPS R0, #&0C
+ 4320     BNE chr_bell
+ 4330     STMFD R13!, {R1,R14}
+ 4340     MOV R0, #1               ; Clear full screen
+ 4350     STRB R0, params
+ 4360     MOV R0, #&4A
+ 4370     BL delete
+ 4380     LDMFD R13!, {R1,R14}
+ 4390     B chr_done
+ 4400   .chr_bell
+ 4410   CMPS R0, #7                ; Rx 0x07 BELL
+ 4420     BEQ bell
+ 4430   .chr_norm
+ 4440     STMFD R13!, {R1,R12,R14} ; Rx normal characters
+ 4450     BL print                 ; Send to the screen
+ 4460     LDMFD R13!, {R1,R12,R14}
+ 4470     B chr_done
+ 4480  .chr_esc
+ 4490   CMPS R1, #101              ; MODE escape
+ 4500     BNE chr_telneg
+ 4510     CMPS R0, #&5B            ; is this an angle bracket?
+ 4520     MOVEQ R1, #0             ; if so, enter parameter mode
+ 4530     MOVEQ R0, #&FF000000     ;        clear parameters
+ 4540     STREQ R0, params         ;        and store
+ 4550     MOVNE R1, #100           ; else return to normal
+ 4560     STR R1, mode
+ 4570     B chr_done
+ 4580   .chr_telneg                ; MODE telnet negotiation
+ 4590    CMPS R1, #&FF
+ 4600      BNE chr_will
+ 4610      CMPS R0, #&FB           ; &FB = "WILL" request incoming
+ 4620      CMPNES R0, #&FD         ; &FD = "DO" request incoming
+ 4630      CMPNES R0, #&FA         ; &FA = "SEND ME" request incoming
+ 4640      MOVEQ R1, R0
+ 4650      MOVNE R1, #100
+ 4660      STR R1, mode
+ 4670      B chr_done
+ 4680   .chr_will                  ; MODE incoming "WILL" request
+ 4690    CMPS R1, #&FB
+ 4700      BNE chr_do
+ 4720      STMFD R13!, {R0}
+ 4721      MOV R0, #3              ; Just reply "DO" to any "WILL"
+ 4722      MOV R1, #&FF : SWI &57  ;         Negotiation
+ 4723      MOV R1, #&FD : SWI &57  ;         DO
+ 4724      LDMFD R13!, {R1} : SWI &57 ;      whatever
+ 4725      MOV R1, #100 : STR R1, mode
+ 4726      B chr_done
+ 4730   .chr_do                    ; MODE incoming "DO" request
+ 4740    CMPS R1, #&FD
+ 4750      BNE chr_send
+ 4760      MOV R1, #100            ; switch back to normal mode
+ 4770      STR R1, mode
+ 4780      CMPS R0, #&00           ; We support + Binary Tx
+ 4790      CMPNES R0, #&18         ;            + Terminal Type
+ 4800      CMPNES R0, #&20         ;            + Terminal Speed
+ 4810      CMPNES R0, #&1F         ;            + Terminal Size
+ 4820      STMFD R13!, {R0}          ; Stack the received parameter
+ 4830      MOV R0, #3              ; Send bytes
+ 4840      BNE chr_wont
+ 4850      MOV R1, #&FF            ;         Negotiation
+ 4860      SWI &57
+ 4870      MOV R1, #&FB            ;         WILL
+ 4880      SWI &57
+ 4890      LDMFD R13!, {R1}         ; Un-stack received parameter
+ 4900      SWI &57
+ 4910      CMPS R1, #&1F           ; If we say we do terminal size...
+ 4920      MOVNE R1, #100
+ 4930      BNE chr_done
+ 4940      MOV R1, #&FF : SWI &57  ; Negotiate
+ 4950      MOV R1, #&FA : SWI &57  ; SEND
+ 4960      MOV R1, #&1F : SWI &57  ; Terminal size
+ 4970      MOV R1, #&00 : SWI &57  ; 
+ 4980      MOV R1, #&50 : SWI &57  ; 80
+ 4990      MOV R1, #&00 : SWI &57  ; by
+ 5000      MOV R1, #&19 : SWI &57  ; 25
+ 5010      MOV R1, #&FF : SWI &57  ; Negotiate
+ 5020      MOV R1, #&F0 : SWI &57  ; Finished
+ 5030      MOV R1, #100 : STR R1, mode
+ 5040      B chr_done
+ 5050    .chr_wont
+ 5060      MOV R1, #&FF            ;         Negotiation
+ 5070      SWI &57
+ 5080      MOV R1, #&FC            ;         WON'T
+ 5090      SWI &57
+ 5100      LDMFD R13!, {R1}          ; Un-stack received parameter
+ 5110      SWI &57
+ 5120      MOV R1, #100 : STR R1, mode
+ 5130      B chr_done  
+ 5140   .chr_send                  ; Rx telnet negotiation SEND request
+ 5150    CMPS R1, #&FA
+ 5160      BNE chr_discard
+ 5170      CMPS R0, #&18           ; SEND terminal type
+ 5180      BNE send_rate
+ 5190      MOV R0, #3
+ 5200      MOV R1, #&FF : SWI &57  ; Negotiation
+ 5210      MOV R1, #&FA : SWI &57  ; SEND
+ 5220      MOV R1, #&18 : SWI &57  ; Terminal type
+ 5230      MOV R1, #&00 : SWI &57  ; Response
+ 5240      MOV R1, #&41 : SWI &57  ; A
+ 5250      MOV R1, #&4E : SWI &57  ; N
+ 5260      MOV R1, #&53 : SWI &57  ; S
+ 5270      MOV R1, #&49 : SWI &57  ; I
+ 5280      MOV R1, #&FF : SWI &57  ; Negotitation
+ 5290      MOV R1, #&F0 : SWI &57  ; Finished
+ 5300      MOV R1, #102 : STR R1, mode ; discard 01 request char
+ 5310      B chr_done
+ 5320    .send_rate
+ 5330      CMPS R0, #&20
+ 5340      MOVNE R1, #100
+ 5350      STRNE R1, mode
+ 5360      BNE chr_done
+ 5370      MOV R0, #3
+ 5380      MOV R1, #&FF : SWI &57  ; Negotiation
+ 5390      MOV R1, #&FA : SWI &57  ; SEND
+ 5400      MOV R1, #&20 : SWI &57  ; Terminal speed
+ 5410      MOV R1, #&00 : SWI &57  ; Response
+ 5420      MOV R1, #&31 : SWI &57  ; 1
+ 5421      MOV R1, #&39 : SWI &57  ; 9
+ 5430      MOV R1, #&32 : SWI &57  ; 2
+ 5440      MOV R1, #&30 : SWI &57  ; 0
+ 5450      MOV R1, #&30 : SWI &57  ; 0
+ 5460      MOV R1, #&2C : SWI &57  ; ,
+ 5461      MOV R1, #&31 : SWI &57  ; 1
+ 5470      MOV R1, #&39 : SWI &57  ; 9
+ 5480      MOV R1, #&32 : SWI &57  ; 2
+ 5490      MOV R1, #&30 : SWI &57  ; 0
+ 5500      MOV R1, #&30 : SWI &57  ; 0
+ 5510      MOV R1, #&FF : SWI &57  ; Negotitation
+ 5520      MOV R1, #&F0 : SWI &57  ; Finished
+ 5530      MOV R1, #102 : STR R1, mode ; discard 01 request char      
+ 5540      B chr_done  
+ 5550      
+ 5560   .chr_discard               ; A bodge to discard terminal
+ 5570    CMPS R1, #102             ; capability queries that I can't
+ 5580      BNE chr_params          ; be bothered to implement
+ 5590      CMPS R0, #&40
+ 5600      MOVGE R1, #100
+ 5610      CMPS R0, #&2F
+ 5620      MOVLE R1, #100
+ 5630      STR R1, mode
+ 5640      B chr_done
+ 5650   .chr_params
+ 5660    CMPS R1, #7               ; MODE parameters - must be 0-6
+ 5670    MOVGE R1, #102            ; if not then discard
+ 5680    STRGE R1, mode
+ 5690    BGE chr_done
+ 5700    
+ 5710    CMPS R0, #&3B             ; Rx semicolon - next param
+ 5720      ADDEQ R1, R1, #1
+ 5730      STREQ R1, mode
+ 5740      BEQ chr_done
+ 5750    CMPS R0, #&3F             ; Rx ? - negotiation guff, discard
+ 5760      MOVEQ R1, #102
+ 5770      STREQ R1, mode
+ 5780      BEQ chr_done
+ 5790    ADR R2, params            ; otherwise we expect parameters
+ 5800    CMPS R0, #&6D             ; Rx m - set colours
+ 5810      BNE chr_erase
+ 5820      ADD R1, R1, #1          ; Put a terminator on the end
+ 5830      MOV R0, #&FF            ; of the parameters to
+ 5840      STRB R0, [R2, R1]       ; terminate the list
+ 5850      STMFD R13!, {R14}
+ 5860      ADR R11, params
+ 5861      BL m_code               ; process the colours
+ 5870      LDMFD R13!, {R14}
+ 5880      MOV R1, #100            ; switch back to normal mode
+ 5890      STR R1, mode
+ 5900      B chr_done
+ 5910    .chr_erase
+ 5920    CMPS R0, #&4A             ; Rx J or K - erase in display
+ 5930    CMPNE R0, #&4B
+ 5940      BNE chr_move
+ 5950      STMFD R13!, {R14}
+ 5960      BL delete               ; Call the delete routine
+ 5970      LDMFD R13!, {R14}
+ 5980      MOV R1, #100            ; Switch back to normal mode
+ 5990      STR R1, mode
+ 6000      B chr_done
+ 6010    .chr_move
+ 6020    CMPS R0, #&41             ; A-D & H are moves
+ 6030    CMPNE R0, #&42
+ 6040    CMPNE R0, #&43
+ 6050    CMPNE R0, #&44
+ 6060    CMPNE R0, #&48
+ 6070    BNE chr_report
+ 6080      STMFD R13!, {R14}
+ 6090      BL moves                ; Call the move routine
+ 6100      LDMFD R13!, {R14}
+ 6110      MOV R1, #100            ; Switch back to normal mode
+ 6120      STR R1, mode
+ 6130      B chr_done
+ 6140    .chr_report
+ 6150    CMPS R0, #&6E             ; n - Report cursor location
+ 6160      BNE chr_num
+ 6170      LDR R2, x               ; R2 <- current x location
+ 6180      LDR R3, y               ; R3 <- current y location
+ 6190      ADD R2, R2, #1          ; correct for 1-based locations
+ 6200      ADD R3, R3, #1
+ 6210      MOV R4, #0
+ 6220      MOV R5, #0
+ 6230      
+ 6240      .r_y_loop
+ 6250       CMPS R3, #10           ; R5 <- y location 10s
+ 6260       SUBGE R3, R3, #10      ; R3 <- y location units
+ 6270       ADDGE R5, R5, #1
+ 6280       BGE r_y_loop
+ 6290      .r_x_loop
+ 6300       CMPS R2, #10           ; R4 <- x location 10s
+ 6310       SUBGE R2, R2, #10      ; R2 <- x location units
+ 6320       ADDGE R4, R4, #1
+ 6330       BGE r_x_loop
+ 6340
+ 6350       MOV R0, #3             ; Send byte
+ 6360       MOV R1, #&1B           ; Escape
+ 6370       SWI &57
+ 6380       MOV R1, #&5B           ; Square bracket
+ 6390       SWI &57
+ 6400       CMPS R5, #0
+ 6410       ADDGT R1, R5, #&30
+ 6420       SWIGT &57              ; Send y 10s, if present
+ 6430       ADD R1, R3, #&30
+ 6440       SWI &57                ; Send y units
+ 6450       MOV R1, #&3B
+ 6460       SWI &57                ; Send semicolon
+ 6470       CMPS R4, #0
+ 6480       ADDGT R1, R4, #&30
+ 6490       SWIGT &57              ; Send x 10s, if present
+ 6500       ADD R1, R2, #&30
+ 6510       SWI &57
+ 6520       MOV R1, #&52           ; Send R terminator
+ 6530       SWI &57
+ 6540       LDR R2, x
+ 6550       LDR R3, y
+ 6560       MOV R1, #100           ; Switch back to normal mode
+ 6570       STR R1, mode
+ 6580       B chr_done
+ 6590    .chr_num
+ 6600    CMPS R0, #&30             ; check for Rx numerics
+ 6610      MOVLT R1, #100
+ 6620      STRLT R1, mode
+ 6630      BLT chr_done
+ 6640    CMPS R0, #&39
+ 6650      MOVGT R1, #100           ; if not a number, bail
+ 6660      STRGT R1, mode
+ 6670      BGT chr_done
+ 6680      
+ 6690      ; We got a number...    
+ 6700      LDRB R3, [R2, R1]       ; Get current parameter value
+ 6710      SUB R0, R0, #&30
+ 6720      ADD R0, R0, R3, LSL #1  ; multiply by 10
+ 6730      ADD R0, R0, R3, LSL #3  ; add received digit onto it
+ 6740      STRB R0, [R2, R1]
+ 6750    
+ 6760  .chr_done
+ 6770   LDR R11, fifo_r            ; Increment the FIFO read offset
+ 6780   ADD R11, R11, #1
+ 6790   AND R11, R11, #&FF
+ 6800   STR R11, fifo_r      
+ 6810   B chr_loop 
+ 6820   MOV R15, R14               ; return
+ 6830
+ 6840.bell                         ; Ding on a ^G signal
+ 6850   STMFD R13!, {R0-R3}
+ 6860   MOV R0, #1
+ 6870   MVN R1, #5
+ 6880   MOV R2, #100
+ 6890   MOV R3, #3
+ 6900   SWI "Sound_Control"
+ 6910   LDMFD R13!, {R0-R3}
+ 6920 B chr_done
+ 6930
+ 6940
+ 6950  
+ 6960.m_code                       ; handles ANSI m code (colours)
+ 6970 STMFD R13!, {R14}            ; save our return pointer
+ 6980 ;ADR R11, params
+ 6990.applycolour
+ 7000  LDRB R12, [R11], #1         ; load next parameter
+ 7010  CMPS R12, #0                ; 0 - default colours   
+ 7020   MOVEQ R0, #7
+ 7030   MOVEQ R1, #0
+ 7040   STREQ R1, intensity
+ 7050   BLEQ set_fg
+ 7060   MOVEQ R0, #0
+ 7070   BLEQ set_bg
+ 7080   BEQ m_end
+ 7090  CMPS R12, #1                ; 1 - bright
+ 7100   LDREQ R1, intense            
+ 7110   LDREQ R0, fg_colour
+ 7120   STREQ R1, intensity        ; set intensity for future sets
+ 7130   ORREQ R0, R0, R1           ; intensify current colour
+ 7140   STREQ R0, fg_colour
+ 7150   BEQ m_end
+ 7160 CMPS R12, #29                ; 2-29 junk
+ 7170   BLS m_end
+ 7180 CMPS R12, #37                ; 30-37 set FG colour
+ 7190   SUBLE R0, R12, #30
+ 7200   LDRLEB R1, intensity       ; get intensity
+ 7210   ORRLE R0, R0, R1           ; apply intensity
+ 7220   BLLE set_fg
+ 7230   BLE m_end
+ 7240 CMPS R12, #39                ; 38-39 junk
+ 7250   BLE m_end
+ 7260 CMPS R12, #47                ; 40-47 background
+ 7270   SUBLE R0, R12, #40
+ 7280   ;ORRLE R0, R0, R1           ; set intensity
+ 7290   BLLE set_bg
+ 7300   ;MOVLE R1, #0
+ 7310   BLE m_end
+ 7320 CMPS R12, #89                ; 48-89 junk
+ 7330   BLE m_end
+ 7340 CMPS R12, #97                ; 90-97 set FG colour
+ 7350   SUBLE R0, R12, #82
+ 7360   BLLE set_fg
+ 7370   BLE m_end
+ 7380 CMPS R12, #99                ; 98-99 junk
+ 7390   BLE m_end
+ 7400 CMPS R12, #107               ; 100 - 107 set BG colour
+ 7410   SUBLE R0, R12, #92
+ 7420   BLLE set_bg
+ 7430   BLE m_end
+ 7440 B m_done                     ; bail out on unknown code
+ 7450 .m_end
+ 7460 B applycolour
+ 7470 .m_done                 
+ 7480 LDMFD R13!, {R14}
+ 7490 MOV R15, R14                 ; return
+ 7500 
+ 7510.kb_handle
+ 7520  MOV R0, #145                ; OS_Byte 145 - get from buffer
+ 7530  MOV R1, #0                  ; From keyboard
+ 7540  SWI 6                       ; Call OS_Byte
+ 7550  MOVCS R15, R14              ; Return if nothing waiting
+ 7560  
+ 7570  ; If we have a byte wating...
+ 7580  
+ 7590  CMPS R2, #128               ; Check for special keys
+ 7600  BGE kb_special
+ 7610  
+ 7620  MOV R1, R2                  ; Move it into the right register  
+ 7630  MOV R0, #3                  ; Send byte
+ 7640  SWI &57                     ; Call OS_SerialOp
+ 7650  MOV R15, R14
+ 7660  
+ 7670  .kb_special
+ 7680  CMPS R2, #204               ; F12 - Quit
+ 7690   MOVEQ R2, #99              ; "quit" mode
+ 7700   STREQB R2, mode
+ 7710   MOVEQ R15, R14
+ 7720  
+ 7730  AND R1, R2, #158
+ 7740  CMPS R1, #158               ; PgUp / PgDn
+ 7750   BNE kb_arrows
+ 7760   MOV R0, #3                 ; Send byte
+ 7770   MOV R1, #&1B               ; Escape
+ 7780   SWI &57
+ 7790   MOV R1, #&5B               ; Square bracket
+ 7800   SWI &57
+ 7810   RSB R1, R2, #212           ; R1 <- 5 for PgUp, 6 for PgDn
+ 7820   SWI &57
+ 7830   MOV R1, #126               ; tilde
+ 7840   SWI &57
+ 7850   MOV R15, R14
+ 7860
+ 7870  .kb_arrows
+ 7880  AND R1, R2, #140            ; Check for arrow keys
+ 7890  CMPS R1, #140
+ 7900   BNE kb_done
+ 7910   MOV R0, #3                 ; Send byte
+ 7920   MOV R1, #&1B               ; Escape
+ 7930   SWI &57
+ 7940   MOV R1, #&5B               ; Square bracket
+ 7950   SWI &57
+ 7960   RSB R1, R2, #208         ; R1 <- U=A / D=B / R=C / L=D
+ 7970   SWI &57
+ 7980   ;MOV R1, #126
+ 7990   ;SWI &57
+ 8000  
+ 8010  .kb_done
+ 8020  MOV R15, R14
+ 8030]
+ 8040NEXT pass%
+ 8050
+ 8060CALL init
+ 8070
+ 8080infile = OPENIN("adfs::cf.xfer.fontblob")
+ 8090FOR i% = 0 TO 16383 : font%?i% = BGET#infile : NEXT i%
+ 8100CLOSE#infile
+ 8110!font_ptr = font%
+ 8120
+ 8130PRINT ;TAB(0,0);"Worminal v0.1 - Press F12 to quit";
+ 8140REPEAT
+ 8150  CALL main
+ 8160  CALL kb_handle
+ 8170  REM PRINT ;TAB(0,50);!mode
+ 8180UNTIL !mode = 99
+ 8190
