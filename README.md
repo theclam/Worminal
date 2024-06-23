@@ -29,6 +29,7 @@ various font files including the "Bm437_IGS_VGA_8x16.FON" which I use.
 
 Run that font through the converter program:
 
+```
 *blobify
 Blobify - takes an 8x16 fixed bitmap Windows font file
 and outputs a blob containing the 4bpp version suitable
@@ -37,6 +38,7 @@ Enter source font file?8x16
 Enter destination font file (enter for 'fontblob')?
 Completed.
 *
+```
 
 IMPORTANT - YOU NEED TO SET YOUR FONT FILE LOCATION
 ===================================================
@@ -47,7 +49,9 @@ tell it to look for the font file in the same directory where the BASIC program
 is located so that has to be hard coded into the BASIC file. I moved it to the
 top for "convenience":
 
+```
 ffile$ = "ADFS::CF.$.Worminal.fontblob"
+```
 
 Edit it to point at the file you just created.
  
