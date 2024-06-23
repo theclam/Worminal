@@ -13,6 +13,8 @@ the Acorn:
 
 So those are the founding principles of the software :)
 
+Please note - the .txt files are listings that can be directly entered, the non-txt files are BASIC 
+
 Please see the following sections if you want to make it actually work.
 
 IMPORTANT - YOU NEED A FONT FILE
@@ -45,7 +47,7 @@ tell it to look for the font file in the same directory where the BASIC program
 is located so that has to be hard coded into the BASIC file. I moved it to the
 top for "convenience":
 
-font$ = "ADFS::CF.$.Worminal.fontblob"
+ffile$ = "ADFS::CF.$.Worminal.fontblob"
 
 Edit it to point at the file you just created.
  
@@ -65,6 +67,8 @@ Working Features
 - Basic Telnet negotiation (terminal size / speed / ANSI capability)
 - Ding on ^G
 - Clear screen on form feed
+
+Baud rates up to 19200 supported - for now you have to edit the code, though.
 
 Wishlist
 ========
